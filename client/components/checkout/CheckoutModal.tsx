@@ -91,13 +91,6 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [paymentMethod, setPaymentMethod] = useState<
     "card" | "room-charge" | "cash" | "mobile-money"
   >("card");
-  const [paymentDetails, setPaymentDetails] = useState({
-    cardNumber: "",
-    expiryDate: "",
-    cvv: "",
-    cardName: "",
-    mobileMoneyNumber: "",
-  });
   const [loyaltyPoints, setLoyaltyPoints] = useState(1250);
   const [usePoints, setUsePoints] = useState(false);
   const [tipAmount, setTipAmount] = useState<number>(0);
@@ -182,72 +175,44 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
     setIsProcessing(true);
     setCheckoutError("");
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setCheckoutError("Please sign in before placing an order.");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Please sign in before placing an order.");
+
+      const orderResponse = await fetch("/api/menu-orders", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          orderType,
+          paymentMethod,
+          customer: customerInfo,
+          items: getCartItems().filter(({ item }) => item).map(({ item, quantity }) => ({ id: item!.id, quantity })),
+          tipAmount,
+        }),
+      });
+      const orderPayload = await orderResponse.json();
+      if (!orderResponse.ok) throw new Error(orderPayload.error || "We could not create your order. Please try again.");
+
+      if (orderPayload.requiresOnlinePayment) {
+        const paymentResponse = await fetch("/api/payments/flutterwave/initiate", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
+          body: JSON.stringify({ orderId: orderPayload.orderId }),
+        });
+        const paymentPayload = await paymentResponse.json();
+        if (!paymentResponse.ok || !paymentPayload.paymentLink) throw new Error(paymentPayload.error || "We could not start secure payment.");
+        window.location.assign(paymentPayload.paymentLink);
+        return;
+      }
+
+      setOrderNumber(orderPayload.orderNumber);
+      setOrderConfirmed(true);
+      setStep("confirmation");
+    } catch (error) {
+      setCheckoutError(error instanceof Error ? error.message : "We could not place your order. Please try again.");
+    } finally {
       setIsProcessing(false);
-      return;
     }
-
-    const orderNumberValue = `SH${Date.now().toString().slice(-8)}`;
-    const { data: order, error: orderError } = await supabase
-      .from("menu_orders")
-      .insert({
-        order_number: orderNumberValue,
-        user_id: user.id,
-        order_type: orderType,
-        status: "pending",
-        payment_method: paymentMethod,
-        payment_status: "pending",
-        first_name: customerInfo.firstName.trim(),
-        last_name: customerInfo.lastName.trim(),
-        email: customerInfo.email.trim(),
-        phone: customerInfo.phone.trim(),
-        room_number: customerInfo.roomNumber.trim() || null,
-        delivery_address: customerInfo.deliveryAddress.trim() || null,
-        special_requests: customerInfo.specialRequests.trim() || null,
-        subtotal: getSubtotal(),
-        tax_amount: getTax(),
-        service_fee: getServiceFee(),
-        tip_amount: tipAmount,
-        points_discount: getPointsDiscount(),
-        total_amount: getFinalTotal(),
-      })
-      .select("id, order_number")
-      .single();
-
-    if (orderError || !order) {
-      console.error("Unable to create menu order", orderError);
-      setCheckoutError("We could not place your order. Please try again.");
-      setIsProcessing(false);
-      return;
-    }
-
-    const { error: itemsError } = await supabase.from("menu_order_items").insert(
-      getCartItems()
-        .filter(({ item }) => item)
-        .map(({ item, quantity }) => ({
-          order_id: order.id,
-          menu_item_id: item!.id,
-          item_name: item!.name,
-          unit_price: item!.price,
-          quantity,
-          line_total: item!.price * quantity,
-        })),
-    );
-
-    if (itemsError) {
-      console.error("Unable to save menu order items", itemsError);
-      await supabase.from("menu_orders").delete().eq("id", order.id);
-      setCheckoutError("We could not save the order items. Please try again.");
-      setIsProcessing(false);
-      return;
-    }
-
-    setOrderNumber(order.order_number);
-    setOrderConfirmed(true);
-    setIsProcessing(false);
-    setStep("confirmation");
   };
 
   const resetModal = () => {
@@ -264,13 +229,6 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
       roomNumber: "",
       deliveryAddress: "",
       specialRequests: "",
-    });
-    setPaymentDetails({
-      cardNumber: "",
-      expiryDate: "",
-      cvv: "",
-      cardName: "",
-      mobileMoneyNumber: "",
     });
     setUsePoints(false);
     setTipAmount(0);
@@ -634,70 +592,9 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
         </div>
       </div>
 
-      {/* Payment Details */}
-      {paymentMethod === "card" && (
-        <div className="space-y-4 p-4 bg-gray-50 rounded-lg">
-          <div>
-            <label className="block text-sm font-medium mb-2">
-              Cardholder Name
-            </label>
-            <Input
-              value={paymentDetails.cardName}
-              onChange={(e) =>
-                setPaymentDetails((prev) => ({
-                  ...prev,
-                  cardName: e.target.value,
-                }))
-              }
-              placeholder="Name on card"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2">Card Number</label>
-            <Input
-              value={paymentDetails.cardNumber}
-              onChange={(e) =>
-                setPaymentDetails((prev) => ({
-                  ...prev,
-                  cardNumber: e.target.value,
-                }))
-              }
-              placeholder="1234 5678 9012 3456"
-              maxLength={19}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Expiry Date
-              </label>
-              <Input
-                value={paymentDetails.expiryDate}
-                onChange={(e) =>
-                  setPaymentDetails((prev) => ({
-                    ...prev,
-                    expiryDate: e.target.value,
-                  }))
-                }
-                placeholder="MM/YY"
-                maxLength={5}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-2">CVV</label>
-              <Input
-                value={paymentDetails.cvv}
-                onChange={(e) =>
-                  setPaymentDetails((prev) => ({
-                    ...prev,
-                    cvv: e.target.value,
-                  }))
-                }
-                placeholder="123"
-                maxLength={3}
-              />
-            </div>
-          </div>
+      {(paymentMethod === "card" || paymentMethod === "mobile-money") && (
+        <div className="rounded-lg bg-blue-50 p-4 text-sm text-blue-800">
+          You will be taken to Flutterwave&apos;s secure checkout to complete your payment. Card and Uganda mobile-money details are entered directly with Flutterwave and never stored in this application.
         </div>
       )}
 
@@ -712,21 +609,6 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
           <p className="text-sm text-blue-700">
             This order will be added to your room bill. You can pay at checkout.
           </p>
-        </div>
-      )}
-
-      {paymentMethod === "mobile-money" && (
-        <div className="space-y-3 rounded-lg bg-purple-50 p-4">
-          <label className="block text-sm font-medium">Mobile Money Number</label>
-          <Input
-            type="tel"
-            inputMode="tel"
-            value={paymentDetails.mobileMoneyNumber}
-            onChange={(e) => setPaymentDetails((prev) => ({ ...prev, mobileMoneyNumber: e.target.value }))}
-            placeholder="Enter mobile money number"
-            autoComplete="tel"
-          />
-          <p className="text-sm text-purple-700">You will receive a secure payment prompt from your mobile money provider.</p>
         </div>
       )}
 
@@ -793,7 +675,7 @@ const CheckoutModal: React.FC<CheckoutModalProps> = ({
         </Button>
         <Button
           onClick={handlePlaceOrder}
-          disabled={isProcessing || (paymentMethod === "mobile-money" && !paymentDetails.mobileMoneyNumber.trim())}
+          disabled={isProcessing}
           className="flex-1 bg-sheraton-gold hover:bg-sheraton-gold/90 text-sheraton-navy"
         >
           {isProcessing ? (

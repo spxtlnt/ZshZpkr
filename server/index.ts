@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { handleDemo } from "./routes/demo";
-import { initiateFlutterwavePayment, verifyFlutterwavePayment } from "./routes/flutterwave";
+import { createMenuOrder, handleFlutterwaveWebhook, initiateFlutterwavePayment, verifyFlutterwavePayment } from "./routes/flutterwave";
 
 export function createServer() {
   const app = express();
@@ -17,8 +17,10 @@ export function createServer() {
   });
 
   app.get("/api/demo", handleDemo);
+  app.post("/api/menu-orders", createMenuOrder);
   app.post("/api/payments/flutterwave/initiate", initiateFlutterwavePayment);
   app.get("/api/payments/flutterwave/verify", verifyFlutterwavePayment);
+  app.post("/api/payments/flutterwave/webhook", handleFlutterwaveWebhook);
 
   return app;
 }
