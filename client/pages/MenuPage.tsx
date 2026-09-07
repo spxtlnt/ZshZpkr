@@ -58,10 +58,22 @@ import {
   Gift,
 } from "lucide-react";
 
+const MENU_CART_STORAGE_KEY = "sheraton-menu-cart";
+
+const loadSavedCart = (): Record<string, number> => {
+  try {
+    const savedCart = JSON.parse(localStorage.getItem(MENU_CART_STORAGE_KEY) ?? "{}");
+    if (!savedCart || typeof savedCart !== "object") return {};
+    return Object.fromEntries(Object.entries(savedCart).filter(([id, quantity]) => typeof id === "string" && Number.isInteger(quantity) && quantity > 0));
+  } catch {
+    return {};
+  }
+};
+
 const MenuPage = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
-  const [cart, setCart] = useState<{ [key: string]: number }>({});
+  const [cart, setCart] = useState<Record<string, number>>(loadSavedCart);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeTab, setActiveTab] = useState("food");
   const [showCheckout, setShowCheckout] = useState(false);
@@ -70,6 +82,10 @@ const MenuPage = () => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(MENU_CART_STORAGE_KEY, JSON.stringify(cart));
+  }, [cart]);
 
   const categories = [
     { id: "all", name: "All Items", icon: Utensils },
@@ -90,7 +106,9 @@ const MenuPage = () => {
       .order("created_at", { ascending: true })
       .then(({ data }) => {
         if (!data) return;
-        setMenuItems(data.map(menuItemFromDatabaseRow));
+        const availableItems = data.map(menuItemFromDatabaseRow);
+        setMenuItems(availableItems);
+        setCart((currentCart) => Object.fromEntries(Object.entries(currentCart).filter(([id]) => availableItems.some((item) => item.id === id))));
       });
 
   }, []);
